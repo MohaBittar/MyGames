@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GameHub - Play & Create Games</title>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+        import { getAuth, onAuthStateChanged, signOut, signInWithPopup, GoogleAuthProvider, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+        import { getFirestore, collection, getDocs, getDoc, addDoc, deleteDoc, doc, updateDoc, increment, query, where } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDAq5ak2gH4uBKm9zgBgEjSTaQhvQ15Wa8",
+            authDomain: "mygames-d04ab.firebaseapp.com",
+            projectId: "mygames-d04ab",
+            storageBucket: "mygames-d04ab.firebasestorage.app",
+            messagingSenderId: "458049984617",
+            appId: "1:458049984167:web:de4e0a74e4b8b6a0466af8",
+            measurementId: "G-2DQK3P02F6"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const googleProvider = new GoogleAuthProvider();
+
+        let currentUser = null;
+        let isAdmin = false;
+        const ADMIN_EMAILS = ["Admin@gmail.com"];
+
+        onAuthStateChanged(auth, (user) => {
+            currentUser = user;
+            isAdmin = user ? ADMIN_EMAILS.includes(user.email) : false;
+            updateNav();
+            handleRoute();
+        });
+
+        function updateNav() {
+            const authBtn = document.getElementById("authBtn");
+            const userMenu = document.getElementById("userMenu");
+            const userAvatar = document.getElementById("userAvatar");
+            const adminLink = document.getElementById("adminLink");
+            if (currentUser) {
+                authBtn.style.display = "none";
+                userMenu.style.display = "flex";
+                userAvatar.src = currentUser.photoURL || "https://ui-avatars.com/api/?name=" + (currentUser.displayName || currentUser.email);
+                if (adminLink) adminLink.style.display = isAdmin ? "" : "none";
+            } else {
+                authBtn.style.display = "";
+                userMenu.style.display = "none";
+                if (adminLink) adminLink.style.display = "none";
+            }
+        }
+
+        // Router
+        function handleRoute() {
+            const hash = window.location.hash || "#home";
+            const page = hash.split("?")[0].replace("#", "");
+            const params = new URLSearchParams(hash.includes("?") ? hash.split("?")[1] : "");
+
+            document.querySelectorAll(".page").forEach(p => p.style.display = "none");
+
+            if (page === "login") {
+                document.getElementById("page-login").style.display = "";
+            } else if (page === "play") {
+                document.getElementById("page-play").style.display = "";
+                loadGame(params.get("id"));
+            } else if (page === "upload") {
+                if (!currentUser) { window.location.hash = "#login"; return; }
+                document.getElementById("page-upload").style.display = "";
+            } else if (page === "editor") {
+                document.getElementById("page-editor").style.display = "";
+                initEditor();
+            } else if (page === "admin") {
+                if (!currentUser || !isAdmin) { window.location.hash = "#home"; return; }
+                document.getElementById("page-admin").style.display = "";
+                loadAdminGames();
+            } else {
+                document.getElementById("page-home").style.display = "";
+                loadHomeGames();
+            }
+        }
+
+        window.addEventListener("hashchange", handleRoute);
+        window.addEventListener("load", () => { handleRoute(); updateNav(); });
+
+        // Auth functions
+        window.loginWithGoogle = async function() {
+            try {
+                await signInWithPopup(auth, googleProvider);
+                window.location.hash = "#home";
+            } catch (e) {
+                document.getElementById("loginError").textContent = e.message;
+            }
+        };
+
+        window.loginWithEmail = async function() {
+            const email = document.getElementById("loginEmail").value;
+            const pass = document.getElementById("loginPass").value;
+            try {
+                await signInWithEmailAndPassword(auth, email, pass);
+                window.location.hash = "#home";
+            } catch (e) {
+                document.getElementById("loginError").textContent = e.message;
+            }
+        };
+
+        window.signupWithEmail = async function() {
+            const email = document.getElementById("signupEmail").value;
+            const pass = document.getElementById("signupPass").value;
+            try {
+                await createUserWithEmailAndPassword(auth, email, pass);
+                window.location.hash = "#home";
+            } catch (e) {
+                document.getElementById("loginError").textContent = e.message;
+            }
+        };
+
+        window.logout = function() {
+            signOut(auth).then(() => { window.location.hash = "#home"; });
+        };
+
+        window.showLoginTab = function(tab) {
+            document.getElementById("loginForm").style.display = tab === "login" ? "" : "none";
+            document.getElementById("signupForm").style.display = tab === "signup" ? "" : "none";
+            document.querySelectorAll(".auth-tab").forEach(t => t.classList.remove("active"));
+            event.target.classList.add("active");
+            document.getElementById("loginError").textContent = "";
+        };
+
+        // Home page
+        async function loadHomeGames() {
+            const gamesList = document.getElementById("gamesList");
+            const featuredGrid = document.getElementById("featuredGrid");
+            try {
+                const snap = await getDocs(collection(db, "games"));
+                let html = "";
+                let featuredHtml = "";
+                let count = 0;
+                snap.forEach((d) => {
+                    const g = d.data();
+                    const id = d.id;
+                    if (count < 4 && g.featured) {
+                        featuredHtml += `<div class="featured-card" onclick="window.location.hash='#play?id=${id}'">
+                            <div class="featured-img" style="background-image:url('${g.thumbnail || "https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=400"}')"></div>
+                            <div class="featured-info"><h3>${g.title}</h3><span class="category-badge">${g.category||"Game"}</span></div>
+                        </div>`;
+                        count++;
+                    }
+                    html += `<div class="game-card" onclick="window.location.hash='#play?id=${id}'">
+                        <div class="game-thumb" style="background-image:url('${g.thumbnail || "https://images.unsplash.com/photo-1511512578047-dfb367046420?w=300"}')"></div>
+                        <div class="game-info"><h4>${g.title}</h4><p>${g.category||"Game"}</p>
+                        <div class="game-meta"><span>${g.plays||0} plays</span><span>${g.author||"Anonymous"}</span></div></div></div>`;
+                });
+                if (featuredGrid) featuredGrid.innerHTML = featuredHtml || '<p style="color:#555">No featured games yet</p>';
+                if (gamesList) gamesList.innerHTML = html || '<p class="no-games">No games yet. Be the first to upload!</p>';
+            } catch (e) {
+                console.error(e);
+                if (gamesList) gamesList.innerHTML = '<p class="no-games">Error loading games.</p>';
+            }
+        }
+
+        window.searchGames = function() {
+            const q = document.getElementById("searchInput").value.toLowerCase();
+            document.querySelectorAll(".game-card").forEach(c => {
+                const t = c.querySelector("h4").textContent.toLowerCase();
+                c.style.display = t.includes(q) ? "" : "none";
+            });
+        };
+
+        window.filterCategory = function(cat) {
+            document.querySelectorAll(".game-card").forEach(c => {
+                const p = c.querySelector("p").textContent.toLowerCase();
+                c.style.display = (cat === "all" || p === cat) ? "" : "none";
+            });
+            document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+            event.target.classList.add("active");
+        };
+
+        // Play page
+        async function loadGame(id) {
+            const container = document.getElementById("gameContainer");
+            if (!id) { container.innerHTML = '<div class="error-state"><h2>No game specified</h2><p><a href="#home">Browse games</a></p></div>'; return; }
+            try {
+                const snap = await getDoc(doc(db, "games", id));
+                if (!snap.exists()) { container.innerHTML = '<div class="error-state"><h2>Game not found</h2><p><a href="#home">Browse games</a></p></div>'; return; }
+                const game = snap.data();
+                document.getElementById("gameTitle").textContent = game.title;
+                document.getElementById("gameAuthor").textContent = game.author || "Anonymous";
+                document.getElementById("gameCategory").textContent = game.category || "Game";
+                document.getElementById("gamePlays").textContent = (game.plays || 0) + " plays";
+                document.getElementById("gameDesc").textContent = game.description || "";
+
+                const frame = document.getElementById("gameFrame");
+                if (game.gameHtml) {
+                    const blob = new Blob([game.gameHtml], { type: "text/html" });
+                    frame.src = URL.createObjectURL(blob);
+                } else if (game.url) {
+                    frame.src = game.url;
+                } else {
+                    container.innerHTML = '<div class="error-state"><h2>Game not available</h2><p><a href="#home">Browse games</a></p></div>';
+                    return;
+                }
+                await updateDoc(doc(db, "games", id), { plays: increment(1) });
+            } catch (e) {
+                console.error(e);
+                container.innerHTML = '<div class="error-state"><h2>Error loading game</h2></div>';
+            }
+        }
+
+        window.toggleFullscreen = function() {
+            const w = document.querySelector(".game-wrapper");
+            if (!document.fullscreenElement) w.requestFullscreen();
+            else document.exitFullscreen();
+        };
+
+        // Upload page
+        window.uploadGame = async function() {
+            if (!currentUser) { window.location.hash = "#login"; return; }
+            const title = document.getElementById("upTitle").value.trim();
+            const category = document.getElementById("upCategory").value;
+            const description = document.getElementById("upDesc").value.trim();
+            const url = document.getElementById("upUrl").value.trim();
+            const status = document.getElementById("upStatus");
+
+            if (!title) { status.innerHTML = '<span class="error">Enter a title</span>'; return; }
+
+            status.innerHTML = '<span class="loading">Uploading...</span>';
+            try {
+                await addDoc(collection(db, "games"), {
+                    title, category, description, url,
+                    thumbnail: "",
+                    featured: false,
+                    author: currentUser.displayName || currentUser.email,
+                    authorId: currentUser.uid,
+                    plays: 0,
+                    createdAt: new Date().toISOString(),
+                    approved: false
+                });
+                status.innerHTML = '<span class="success">Game uploaded! Pending admin approval.</span>';
+                document.getElementById("uploadForm").reset();
+            } catch (e) {
+                status.innerHTML = `<span class="error">${e.message}</span>`;
+            }
+        };
+
+        // Editor
+        let editorData = {};
+        let currentTool = "ground";
+        let gridSize = 30;
+        let isDrawing = false;
+        let editorInited = false;
+
+        const GRID_COLORS = { ground:"#8B4513", platform:"#228B22", spike:"#FF4444", coin:"#FFD700", player:"#00FF00", enemy:"#FF0000", flag:"#FF69B4", spring:"#00BFFF", eraser:"#1a1a2e" };
+
+        function initEditor() {
+            if (editorInited) return;
+            editorInited = true;
+            const canvas = document.getElementById("editorCanvas");
+            const ctx = canvas.getContext("2d");
+
+            document.querySelectorAll(".tool-btn").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    document.querySelectorAll(".tool-btn").forEach(b => b.classList.remove("active"));
+                    btn.classList.add("active");
+                    currentTool = btn.dataset.tool;
+                    document.getElementById("statusTool").textContent = "Tool: " + currentTool;
+                });
+            });
+
+            document.getElementById("gridSizeSel").addEventListener("change", (e) => {
+                gridSize = parseInt(e.target.value);
+                document.getElementById("statusGrid").textContent = "Grid: " + gridSize + "px";
+                drawEditorGrid();
+            });
+
+            canvas.addEventListener("mousedown", (e) => { isDrawing = true; paintEditor(e); });
+            canvas.addEventListener("mousemove", (e) => {
+                const r = canvas.getBoundingClientRect();
+                document.getElementById("statusCoords").textContent = `X: ${Math.floor((e.clientX-r.left)/gridSize)}, Y: ${Math.floor((e.clientY-r.top)/gridSize)}`;
+                if (isDrawing) paintEditor(e);
+            });
+            canvas.addEventListener("mouseup", () => isDrawing = false);
+            canvas.addEventListener("mouseleave", () => isDrawing = false);
+
+            function paintEditor(e) {
+                const r = canvas.getBoundingClientRect();
+                const x = Math.floor((e.clientX - r.left) / gridSize) * gridSize;
+                const y = Math.floor((e.clientY - r.top) / gridSize) * gridSize;
+                const key = `${x},${y}`;
+                if (currentTool === "eraser") { delete editorData[key]; ctx.fillStyle = "#1a1a2e"; }
+                else { editorData[key] = currentTool; ctx.fillStyle = GRID_COLORS[currentTool]; }
+                ctx.fillRect(x, y, gridSize - 1, gridSize - 1);
+            }
+
+            function drawEditorGrid() {
+                ctx.fillStyle = "#1a1a2e";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.strokeStyle = "rgba(255,255,255,0.03)";
+                ctx.lineWidth = 0.5;
+                for (let x = 0; x < canvas.width; x += gridSize) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
+                for (let y = 0; y < canvas.height; y += gridSize) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
+                Object.entries(editorData).forEach(([k,t]) => {
+                    const [x,y] = k.split(",").map(Number);
+                    ctx.fillStyle = GRID_COLORS[t];
+                    ctx.fillRect(x, y, gridSize-1, gridSize-1);
+                });
+            }
+
+            drawEditorGrid();
+
+            window.previewEditorGame = function() {
+                const modal = document.getElementById("previewModal");
+                const pc = document.getElementById("previewCanvas");
+                const px = pc.getContext("2d");
+                modal.classList.add("active");
+
+                let player=null,vy=0,coins=0,pl=[],sp=[],en=[],cn=[],sr=[],fl=null;
+                Object.entries(editorData).forEach(([k,t])=>{
+                    const[a,b]=k.split(",").map(Number);
+                    if(t==="player")player={x:a,y:b,w:gridSize-1,h:gridSize-1,gy:false};
+                    if(t==="ground"||t==="platform")pl.push({x:a,y:b,w:gridSize-1,h:gridSize-1});
+                    if(t==="spike")sp.push({x:a,y:b,w:gridSize-1,h:gridSize-1});
+                    if(t==="enemy")en.push({x:a,y:b,w:gridSize-1,h:gridSize-1,d:1,s:1});
+                    if(t==="coin")cn.push({x:a,y:b,c:false});
+                    if(t==="spring")sr.push({x:a,y:b,w:gridSize-1,h:gridSize-1});
+                    if(t==="flag")fl={x:a,y:b};
+                });
+                if(!player) player={x:50,y:400,w:gridSize-1,h:gridSize-1,gy:false};
+
+                const K={};
+                const kd=e=>K[e.code]=true;
+                const ku=e=>K[e.code]=false;
+                document.addEventListener("keydown",kd);
+                document.addEventListener("keyup",ku);
+                let af;
+
+                function loop(){
+                    px.fillStyle="#1a1a2e";px.fillRect(0,0,900,500);
+                    if(K.ArrowLeft||K.KeyA)player.x-=4;
+                    if(K.ArrowRight||K.KeyD)player.x+=4;
+                    if((K.ArrowUp||K.KeyW||K.Space)&&player.gy){vy=-12;player.gy=false}
+                    vy+=0.6;player.y+=vy;player.gy=false;
+                    pl.forEach(p=>{if(player.x<p.x+p.w&&player.x+player.w>p.x&&player.y+player.h>p.y&&player.y+player.h<p.y+p.h+10&&vy>0){player.y=p.y-player.h;vy=0;player.gy=true}});
+                    sr.forEach(s=>{if(player.x<s.x+s.w&&player.x+player.w>s.x&&player.y+player.h>s.y&&player.y+player.h<s.y+s.h+5){vy=-18;player.gy=false}});
+                    cn.forEach(c=>{if(!c.c&&player.x<c.x+gridSize&&player.x+player.w>c.x&&player.y<c.y+gridSize&&player.y+player.h>c.y){c.c=true;coins++}});
+                    sp.forEach(s=>{if(player.x<s.x+s.w&&player.x+player.w>s.x&&player.y<s.y+s.h&&player.y+player.h>s.y){player.x=50;player.y=400;vy=0}});
+                    en.forEach(e=>{e.x+=e.s*e.d;if(e.x<=0||e.x>=900-e.w)e.d*=-1;
+                        if(player.x<e.x+e.w&&player.x+player.w>e.x&&player.y<e.y+e.h&&player.y+player.h>e.y){
+                            if(vy>0&&player.y+player.h<e.y+e.h/2){e.x=-100;vy=-10}else{player.x=50;player.y=400;vy=0}}});
+                    if(fl&&player.x<fl.x+gridSize&&player.x+player.w>fl.x&&player.y<fl.y+gridSize&&player.y+player.h>fl.y){alert("You win! Coins: "+coins);closePreview();return}
+                    if(player.y>500){player.x=50;player.y=400;vy=0}
+
+                    px.fillStyle="#8B4513";pl.forEach(p=>px.fillRect(p.x,p.y,p.w,p.h));
+                    px.fillStyle="#FF4444";sp.forEach(s=>{px.beginPath();px.moveTo(s.x+s.w/2,s.y);px.lineTo(s.x+s.w,s.y+s.h);px.lineTo(s.x,s.y+s.h);px.fill()});
+                    px.fillStyle="#FF0000";en.forEach(e=>px.fillRect(e.x,e.y,e.w,e.h));
+                    px.fillStyle="#FFD700";cn.forEach(c=>{if(!c.c){px.beginPath();px.arc(c.x+gridSize/2,c.y+gridSize/2,gridSize/3,0,Math.PI*2);px.fill()}});
+                    px.fillStyle="#00BFFF";sr.forEach(s=>px.fillRect(s.x,s.y+s.h/2,s.w,s.h/2));
+                    if(fl){px.fillStyle="#FF69B4";px.fillRect(fl.x,fl.y,4,gridSize);px.beginPath();px.moveTo(fl.x+4,fl.y);px.lineTo(fl.x+gridSize,fl.y+gridSize/3);px.lineTo(fl.x+4,fl.y+gridSize/2);px.fill()}
+                    px.fillStyle="#0F0";px.fillRect(player.x,player.y,player.w,player.h);
+                    px.fillStyle="#fff";px.font="16px monospace";px.fillText("Coins: "+coins,10,25);
+                    px.fillText("Arrow keys/WASD + Space",10,490);
+                    af=requestAnimationFrame(loop);
+                }
+                loop();
+                modal._cleanup=()=>{cancelAnimationFrame(af);document.removeEventListener("keydown",kd);document.removeEventListener("keyup",ku)};
+            };
+
+            window.closePreview = function() {
+                document.getElementById("previewModal").classList.remove("active");
+                const m = document.getElementById("previewModal");
+                if (m._cleanup) m._cleanup();
+            };
+
+            window.saveEditorLocal = function() {
+                localStorage.setItem("gh_editor", JSON.stringify(editorData));
+                alert("Saved locally!");
+            };
+
+            window.loadEditorLocal = function() {
+                const d = localStorage.getItem("gh_editor");
+                if (d) { editorData = JSON.parse(d); drawEditorGrid(); alert("Loaded!"); }
+                else alert("No saved data found.");
+            };
+
+            window.clearEditor = function() {
+                if (confirm("Clear everything?")) { editorData = {}; drawEditorGrid(); }
+            };
+
+            window.exportEditorGame = async function() {
+                if (!currentUser) { alert("Sign in first!"); window.location.hash = "#login"; return; }
+                const gameHtml = generateGameHtml();
+                const title = prompt("Game title:");
+                if (!title) return;
+                const category = prompt("Category (Platformer/Puzzle/Action/Arcade):", "Platformer") || "Platformer";
+                const status = document.getElementById("editorStatus");
+                status.innerHTML = '<span class="loading">Saving...</span>';
+                try {
+                    await addDoc(collection(db, "games"), {
+                        title, category, description: "Made with GameHub Editor",
+                        gameHtml, url: "",
+                        thumbnail: "",
+                        featured: false,
+                        author: currentUser.displayName || currentUser.email,
+                        authorId: currentUser.uid,
+                        plays: 0,
+                        createdAt: new Date().toISOString(),
+                        approved: false
+                    });
+                    status.innerHTML = '<span class="success">Game uploaded! Pending approval.</span>';
+                } catch (e) {
+                    status.innerHTML = `<span class="error">${e.message}</span>`;
+                }
+            };
+
+            function generateGameHtml() {
+                return `<!DOCTYPE html><html><head><title>Game</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0a0a0f;display:flex;align-items:center;justify-content:center;height:100vh}canvas{background:#1a1a2e}</style></head><body><canvas id="c" width="900" height="500"></canvas><script>const c=document.getElementById("c"),x=c.getContext("2d");const G=${gridSize},D=${JSON.stringify(editorData)};const P={x:50,y:400,w:G-1,h:G-1,gy:false};let vy=0,C=0,K={};document.addEventListener("keydown",e=>K[e.code]=true);document.addEventListener("keyup",e=>K[e.code]=false);let pl=[],sp=[],en=[],cn=[],sr=[],fl=null;Object.entries(D).forEach(([k,t])=>{const[a,b]=k.split(",").map(Number);if(t==="player")P.x=a,P.y=b;if(t==="ground"||t==="platform")pl.push({x:a,y:b,w:G-1,h:G-1});if(t==="spike")sp.push({x:a,y:b,w:G-1,h:G-1});if(t==="enemy")en.push({x:a,y:b,w:G-1,h:G-1,d:1,s:1});if(t==="coin")cn.push({x:a,y:b,c:false});if(t==="spring")sr.push({x:a,y:b,w:G-1,h:G-1});if(t==="flag")fl={x:a,y:b}});function loop(){x.fillStyle="#1a1a2e";x.fillRect(0,0,900,500);if(K.ArrowLeft||K.KeyA)P.x-=4;if(K.ArrowRight||K.KeyD)P.x+=4;if((K.ArrowUp||K.KeyW||K.Space)&&P.gy){vy=-12;P.gy=false}vy+=0.6;P.y+=vy;P.gy=false;pl.forEach(p=>{if(P.x<p.x+p.w&&P.x+P.w>p.x&&P.y+P.h>p.y&&P.y+P.h<p.y+p.h+10&&vy>0){P.y=p.y-p.h;vy=0;P.gy=true}});sr.forEach(s=>{if(P.x<s.x+s.w&&P.x+P.w>s.x&&P.y+P.h>s.y&&P.y+P.h<s.y+s.h+5){vy=-18;P.gy=false}});cn.forEach(c=>{if(!c.c&&P.x<c.x+G&&P.x+P.w>c.x&&P.y<c.y+G&&P.y+P.h>c.y){c.c=true;C++}});sp.forEach(s=>{if(P.x<s.x+s.w&&P.x+P.w>s.x&&P.y<s.y+s.h&&P.y+P.h>s.y){P.x=50;P.y=400;vy=0}});en.forEach(e=>{e.x+=e.s*e.d;if(e.x<=0||e.x>=900-e.w)e.d*=-1;if(P.x<e.x+e.w&&P.x+P.w>e.x&&P.y<e.y+e.h&&P.y+P.h>e.y){if(vy>0&&P.y+P.h<e.y+e.h/2){e.x=-100;vy=-10}else{P.x=50;P.y=400;vy=0}}});if(fl&&P.x<fl.x+G&&P.x+P.w>fl.x&&P.y<fl.y+G&&P.y+P.h>fl.y){alert("Win! Coins:"+C);location.reload()}if(P.y>500){P.x=50;P.y=400;vy=0}x.fillStyle="#8B4513";pl.forEach(p=>x.fillRect(p.x,p.y,p.w,p.h));x.fillStyle="#FF4444";sp.forEach(s=>{x.beginPath();x.moveTo(s.x+s.w/2,s.y);x.lineTo(s.x+s.w,s.y+s.h);x.lineTo(s.x,s.y+s.h);x.fill()});x.fillStyle="#FF0000";en.forEach(e=>x.fillRect(e.x,e.y,e.w,e.h));x.fillStyle="#FFD700";cn.forEach(c=>{if(!c.c){x.beginPath();x.arc(c.x+G/2,c.y+G/2,G/3,0,Math.PI*2);x.fill()}});x.fillStyle="#00BFFF";sr.forEach(s=>x.fillRect(s.x,s.y+s.h/2,s.w,s.h/2));if(fl){x.fillStyle="#FF69B4";x.fillRect(fl.x,fl.y,4,G);x.beginPath();x.moveTo(fl.x+4,fl.y);x.lineTo(fl.x+G,fl.y+G/3);x.lineTo(fl.x+4,fl.y+G/2);x.fill()}x.fillStyle="#0F0";x.fillRect(P.x,P.y,P.w,P.h);x.fillStyle="#fff";x.font="16px monospace";x.fillText("Coins:"+C,10,25);requestAnimationFrame(loop)}loop()<\/script></body></html>`;
+            }
+        }
+
+        // Admin
+        window.addAdminGame = async function() {
+            const title = document.getElementById("adminTitle").value.trim();
+            const category = document.getElementById("adminCategory").value;
+            const description = document.getElementById("adminDesc").value.trim();
+            const url = document.getElementById("adminUrl").value.trim();
+            const featured = document.getElementById("adminFeatured").checked;
+            const status = document.getElementById("adminStatus");
+            if (!title) { status.innerHTML = '<span class="error">Enter title</span>'; return; }
+            status.innerHTML = '<span class="loading">Adding...</span>';
+            try {
+                await addDoc(collection(db, "games"), {
+                    title, category, description, url, thumbnail: "", featured,
+                    author: "Admin", plays: 0, createdAt: new Date().toISOString(), approved: true
+                });
+                status.innerHTML = '<span class="success">Game added!</span>';
+                document.getElementById("addGameForm").reset();
+                loadAdminGames();
+            } catch (e) {
+                status.innerHTML = `<span class="error">${e.message}</span>`;
+            }
+        };
+
+        async function loadAdminGames() {
+            const tbody = document.getElementById("adminGamesBody");
+            try {
+                const snap = await getDocs(collection(db, "games"));
+                let html = "";
+                snap.forEach((d) => {
+                    const g = d.data();
+                    html += `<tr>
+                        <td>${g.title}</td>
+                        <td>${g.category||"-"}</td>
+                        <td>${g.plays||0}</td>
+                        <td>${g.featured?"⭐":"-"}</td>
+                        <td>${g.approved?"✅":"⏳"}</td>
+                        <td>
+                            <button class="btn-sm" onclick="adminToggleFeatured('${d.id}',${!!g.featured})">${g.featured?"Unfeature":"Feature"}</button>
+                            <button class="btn-sm" onclick="adminApprove('${d.id}',${!!g.approved})">${g.approved?"Unapprove":"Approve"}</button>
+                            <button class="btn-sm btn-danger" onclick="adminDelete('${d.id}')">Delete</button>
+                        </td></tr>`;
+                });
+                tbody.innerHTML = html || '<tr><td colspan="6" class="empty">No games</td></tr>';
+                document.getElementById("adminTotalGames").textContent = snap.size;
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="6" class="error">Error loading</td></tr>';
+            }
+        }
+
+        window.adminDelete = async function(id) {
+            if (!confirm("Delete this game?")) return;
+            await deleteDoc(doc(db, "games", id));
+            loadAdminGames();
+        };
+
+        window.adminToggleFeatured = async function(id, cur) {
+            await updateDoc(doc(db, "games", id), { featured: !cur });
+            loadAdminGames();
+        };
+
+        window.adminApprove = async function(id, cur) {
+            await updateDoc(doc(db, "games", id), { approved: !cur });
+            loadAdminGames();
+        };
+    </script>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0a0f;color:#fff;min-height:100vh}
+        .page{display:none}
+        nav{display:flex;align-items:center;justify-content:space-between;padding:1rem 2rem;background:rgba(10,10,15,0.95);backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,0.05);position:sticky;top:0;z-index:100}
+        .logo{font-size:1.5rem;font-weight:800;background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;cursor:pointer}
+        .nav-links{display:flex;gap:1.5rem;align-items:center}
+        .nav-links a{color:#aaa;text-decoration:none;font-size:0.9rem;transition:color 0.3s}
+        .nav-links a:hover{color:#fff}
+        .auth-btn{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;padding:0.6rem 1.5rem;border-radius:25px;cursor:pointer;font-weight:600;transition:transform 0.2s,box-shadow 0.2s}
+        .auth-btn:hover{transform:translateY(-2px);box-shadow:0 5px 20px rgba(102,126,234,0.4)}
+        .user-menu{display:none;align-items:center;gap:0.8rem}
+        .user-menu img{width:36px;height:36px;border-radius:50%;border:2px solid #667eea}
+        .user-menu button{background:rgba(255,255,255,0.1);color:#fff;border:none;padding:0.4rem 1rem;border-radius:20px;cursor:pointer;font-size:0.8rem}
+
+        .hero{padding:4rem 2rem;text-align:center;background:radial-gradient(ellipse at center,rgba(102,126,234,0.15),transparent 70%)}
+        .hero h1{font-size:3rem;margin-bottom:1rem;background:linear-gradient(135deg,#fff,#667eea);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+        .hero p{color:#888;font-size:1.1rem;max-width:600px;margin:0 auto}
+        .search-bar{max-width:500px;margin:2rem auto;position:relative}
+        .search-bar input{width:100%;padding:1rem 1.5rem;border-radius:50px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#fff;font-size:1rem;outline:none;transition:border-color 0.3s}
+        .search-bar input:focus{border-color:#667eea}
+        .search-bar input::placeholder{color:#555}
+
+        .section{padding:2rem;max-width:1200px;margin:0 auto}
+        .section-title{font-size:1.3rem;margin-bottom:1.5rem;display:flex;align-items:center;gap:0.5rem}
+        .section-title::before{content:'';width:4px;height:24px;background:linear-gradient(135deg,#667eea,#764ba2);border-radius:2px}
+        .featured-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1.5rem;margin-bottom:2rem}
+        .featured-card{border-radius:16px;overflow:hidden;cursor:pointer;transition:transform 0.3s;position:relative;aspect-ratio:16/10}
+        .featured-card:hover{transform:translateY(-5px)}
+        .featured-img{width:100%;height:100%;background-size:cover;background-position:center}
+        .featured-info{position:absolute;bottom:0;left:0;right:0;padding:1.5rem;background:linear-gradient(transparent,rgba(0,0,0,0.9))}
+        .featured-info h3{font-size:1.2rem}
+        .category-badge{display:inline-block;padding:0.2rem 0.6rem;background:rgba(102,126,234,0.3);border-radius:12px;font-size:0.75rem;margin-top:0.3rem}
+        .filters{display:flex;gap:0.5rem;margin-bottom:1.5rem;flex-wrap:wrap}
+        .filter-btn{padding:0.5rem 1rem;border-radius:20px;border:1px solid rgba(255,255,255,0.1);background:transparent;color:#aaa;cursor:pointer;font-size:0.85rem;transition:all 0.3s}
+        .filter-btn:hover,.filter-btn.active{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border-color:transparent}
+        .games-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1.5rem}
+        .game-card{background:rgba(255,255,255,0.03);border-radius:12px;overflow:hidden;cursor:pointer;transition:transform 0.3s,box-shadow 0.3s;border:1px solid rgba(255,255,255,0.05)}
+        .game-card:hover{transform:translateY(-5px);box-shadow:0 10px 30px rgba(102,126,234,0.2)}
+        .game-thumb{width:100%;aspect-ratio:16/10;background-size:cover;background-position:center;background-color:#1a1a2e}
+        .game-info{padding:1rem}
+        .game-info h4{font-size:1rem;margin-bottom:0.3rem}
+        .game-info p{font-size:0.8rem;color:#888}
+        .game-meta{display:flex;justify-content:space-between;margin-top:0.5rem;font-size:0.75rem;color:#666}
+        .no-games{grid-column:1/-1;text-align:center;padding:3rem;color:#555}
+        footer{text-align:center;padding:2rem;color:#444;font-size:0.85rem;border-top:1px solid rgba(255,255,255,0.05);margin-top:3rem}
+
+        .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center}
+        .login-box{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:20px;padding:3rem;width:100%;max-width:420px;text-align:center}
+        .login-logo{font-size:2rem;font-weight:800;background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:0.5rem}
+        .login-sub{color:#666;margin-bottom:1.5rem;font-size:0.95rem}
+        .auth-tabs{display:flex;gap:0.5rem;margin-bottom:1.5rem;justify-content:center}
+        .auth-tab{padding:0.5rem 1.5rem;border-radius:20px;border:1px solid rgba(255,255,255,0.1);background:transparent;color:#aaa;cursor:pointer;font-size:0.85rem}
+        .auth-tab.active{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border-color:transparent}
+        .google-btn{width:100%;padding:1rem;border-radius:12px;border:1px solid rgba(255,255,255,0.1);background:#fff;color:#333;font-size:1rem;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:0.8rem;transition:transform 0.2s;margin-bottom:1rem}
+        .google-btn:hover{transform:translateY(-2px)}
+        .google-btn svg{width:20px;height:20px}
+        .divider{text-align:center;color:#444;margin:1rem 0;font-size:0.85rem}
+        .form-group{margin-bottom:1rem;text-align:left}
+        .form-group label{display:block;font-size:0.85rem;color:#888;margin-bottom:0.4rem}
+        .form-group input,.form-group select,.form-group textarea{width:100%;padding:0.7rem 1rem;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#fff;font-size:0.9rem;outline:none}
+        .form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:#667eea}
+        .form-group select option{background:#1a1a2e}
+        .form-group textarea{min-height:80px;resize:vertical}
+        .full-btn{width:100%;padding:0.8rem;border-radius:8px;border:none;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;font-size:1rem;font-weight:600;cursor:pointer}
+        .full-btn:hover{transform:translateY(-2px)}
+        .error-msg{color:#ff6b6b;font-size:0.85rem;margin-top:1rem;min-height:1.2rem}
+        .back-link{display:block;margin-top:1.5rem;color:#666;text-decoration:none;font-size:0.9rem}
+        .back-link:hover{color:#667eea}
+
+        .game-page{max-width:1100px;margin:0 auto;padding:1.5rem}
+        .game-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1rem;flex-wrap:wrap;gap:1rem}
+        .game-info-bar h1{font-size:1.5rem;margin-bottom:0.3rem}
+        .game-meta-bar{display:flex;gap:1rem;flex-wrap:wrap}
+        .game-meta-bar span{font-size:0.85rem;color:#888}
+        .game-actions{display:flex;gap:0.5rem}
+        .game-actions button{padding:0.5rem 1rem;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#fff;cursor:pointer;font-size:0.85rem}
+        .game-actions button:hover{background:rgba(102,126,234,0.3)}
+        .game-wrapper{position:relative;width:100%;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:#111;border:1px solid rgba(255,255,255,0.05)}
+        .game-wrapper iframe{width:100%;height:100%;border:none}
+        .game-desc-box{margin-top:1.5rem;padding:1.2rem;background:rgba(255,255,255,0.03);border-radius:10px;border:1px solid rgba(255,255,255,0.05)}
+        .game-desc-box h3{font-size:1rem;margin-bottom:0.5rem;color:#888}
+        .game-desc-box p{color:#aaa;font-size:0.9rem;line-height:1.6}
+        .error-state{display:flex;flex-direction:column;align-items:center;justify-content:center;height:40vh;color:#888}
+        .error-state a{color:#667eea}
+
+        .upload-page{max-width:900px;margin:2rem auto;padding:0 1.5rem}
+        .card{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.05);border-radius:12px;padding:1.5rem;margin-bottom:1.5rem}
+        .card-title{font-size:1.1rem;margin-bottom:1.2rem}
+        .upload-btn{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;padding:0.8rem 2.5rem;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;margin-top:0.5rem}
+        .upload-btn:hover{transform:translateY(-2px)}
+        .status-msg{margin-top:1rem;font-size:0.9rem;min-height:1.5rem}
+        .success{color:#4ecdc4}.error{color:#ff6b6b}.loading{color:#667eea}
+
+        .editor-layout{display:flex;height:calc(100vh - 50px)}
+        .tool-panel{width:240px;background:rgba(255,255,255,0.02);border-right:1px solid rgba(255,255,255,0.05);padding:1rem;overflow-y:auto}
+        .panel-title{font-size:0.9rem;font-weight:600;margin-bottom:1rem;color:#888;text-transform:uppercase;letter-spacing:1px}
+        .tool-group{margin-bottom:1.5rem}
+        .tool-group label{display:block;font-size:0.8rem;color:#666;margin-bottom:0.4rem}
+        .tool-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0.5rem}
+        .tool-btn{aspect-ratio:1;border-radius:8px;border:2px solid transparent;cursor:pointer;font-size:1.2rem;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.05)}
+        .tool-btn:hover{border-color:rgba(102,126,234,0.5)}
+        .tool-btn.active{border-color:#667eea;background:rgba(102,126,234,0.2)}
+        .sel-btn{width:100%;padding:0.5rem;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#fff;cursor:pointer;font-size:0.85rem}
+        .action-btns{display:flex;flex-direction:column;gap:0.5rem}
+        .action-btn{padding:0.6rem;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#fff;cursor:pointer;font-size:0.85rem}
+        .action-btn:hover{background:rgba(102,126,234,0.3)}
+        .action-btn.primary{background:linear-gradient(135deg,#667eea,#764ba2);border:none;font-weight:600}
+        .action-btn.danger{border-color:rgba(255,107,107,0.3);color:#ff6b6b}
+        .canvas-area{flex:1;display:flex;align-items:center;justify-content:center;background:#111;position:relative;overflow:hidden}
+        #editorCanvas{background:#1a1a2e;cursor:crosshair;image-rendering:pixelated}
+        .status-bar{position:absolute;bottom:0;left:0;right:0;padding:0.4rem 1rem;background:rgba(0,0,0,0.8);display:flex;justify-content:space-between;font-size:0.75rem;color:#888}
+        .preview-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:200;align-items:center;justify-content:center}
+        .preview-modal.active{display:flex}
+        .preview-content{width:90%;max-width:900px;aspect-ratio:16/9;background:#000;border-radius:12px;overflow:hidden;position:relative}
+        .preview-close{position:absolute;top:1rem;right:1rem;background:rgba(255,255,255,0.2);color:#fff;border:none;width:36px;height:36px;border-radius:50%;cursor:pointer;font-size:1.2rem;z-index:10}
+
+        .admin-layout{display:flex;min-height:calc(100vh - 50px)}
+        .admin-sidebar{width:250px;background:rgba(255,255,255,0.02);border-right:1px solid rgba(255,255,255,0.05);padding:1.5rem;display:flex;flex-direction:column}
+        .admin-sidebar-title{font-size:1.1rem;font-weight:700;margin-bottom:2rem;color:#667eea}
+        .admin-nav{display:flex;flex-direction:column;gap:0.5rem;flex:1}
+        .admin-tab-btn{padding:0.7rem 1rem;border:none;background:transparent;color:#888;text-align:left;border-radius:8px;cursor:pointer;font-size:0.9rem}
+        .admin-tab-btn:hover{background:rgba(255,255,255,0.05);color:#fff}
+        .admin-tab-btn.active{background:rgba(102,126,234,0.2);color:#667eea}
+        .admin-main{flex:1;padding:2rem;overflow-y:auto}
+        .admin-tab-content{display:none}
+        .admin-tab-content.active{display:block}
+        .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:2rem}
+        .stat-card{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.05);border-radius:10px;padding:1.2rem;text-align:center}
+        .stat-number{font-size:2rem;font-weight:700;color:#667eea}
+        .stat-label{font-size:0.85rem;color:#888;margin-top:0.3rem}
+        table{width:100%;border-collapse:collapse}
+        th,td{padding:0.8rem 1rem;text-align:left;border-bottom:1px solid rgba(255,255,255,0.05)}
+        th{color:#888;font-size:0.85rem;font-weight:500}
+        .btn-sm{padding:0.3rem 0.8rem;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#fff;cursor:pointer;font-size:0.8rem;margin-right:0.3rem}
+        .btn-sm:hover{background:rgba(102,126,234,0.3)}
+        .btn-danger{border-color:rgba(255,107,107,0.3);color:#ff6b6b}
+        .btn-danger:hover{background:rgba(255,107,107,0.2)}
+        .empty{text-align:center;color:#555;padding:2rem !important}
+
+        @media(max-width:768px){
+            .hero h1{font-size:2rem}
+            .nav-links a:not(:last-child){display:none}
+            .editor-layout{flex-direction:column}
+            .tool-panel{width:100%;height:auto;border-right:none;border-bottom:1px solid rgba(255,255,255,0.05)}
+            .admin-layout{flex-direction:column}
+            .admin-sidebar{width:100%;border-right:none;border-bottom:1px solid rgba(255,255,255,0.05)}
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="logo" onclick="window.location.hash='#home'">GameHub</div>
+        <div class="nav-links">
+            <a href="#home">Home</a>
+            <a href="#editor">Create</a>
+            <a href="#upload">Upload</a>
+            <a href="#admin" id="adminLink" style="display:none">Admin</a>
+            <button class="auth-btn" id="authBtn" onclick="window.location.hash='#login'">Sign In</button>
+            <div class="user-menu" id="userMenu">
+                <img id="userAvatar" src="" alt="">
+                <button onclick="logout()">Logout</button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- HOME -->
+    <div class="page" id="page-home">
+        <section class="hero">
+            <h1>Play & Create Games</h1>
+            <p>Discover amazing games or build your own and share with the world</p>
+            <div class="search-bar"><input type="text" id="searchInput" placeholder="Search games..." oninput="searchGames()"></div>
+        </section>
+        <div class="section">
+            <h2 class="section-title">Featured Games</h2>
+            <div class="featured-grid" id="featuredGrid"></div>
+        </div>
+        <div class="section">
+            <h2 class="section-title">All Games</h2>
+            <div class="filters">
+                <button class="filter-btn active" onclick="filterCategory('all')">All</button>
+                <button class="filter-btn" onclick="filterCategory('platformer')">Platformer</button>
+                <button class="filter-btn" onclick="filterCategory('puzzle')">Puzzle</button>
+                <button class="filter-btn" onclick="filterCategory('action')">Action</button>
+                <button class="filter-btn" onclick="filterCategory('adventure')">Adventure</button>
+                <button class="filter-btn" onclick="filterCategory('arcade')">Arcade</button>
+            </div>
+            <div class="games-grid" id="gamesList"></div>
+        </div>
+        <footer><p>GameHub Platform 2026 &mdash; Play, Create, Share</p></footer>
+    </div>
+
+    <!-- LOGIN -->
+    <div class="page" id="page-login">
+        <div class="login-wrap">
+            <div class="login-box">
+                <div class="login-logo">GameHub</div>
+                <p class="login-sub">Sign in to play and create games</p>
+                <button class="google-btn" onclick="loginWithGoogle()">
+                    <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                    Sign in with Google
+                </button>
+                <div class="divider">or</div>
+                <div class="auth-tabs">
+                    <button class="auth-tab active" onclick="showLoginTab('login')">Sign In</button>
+                    <button class="auth-tab" onclick="showLoginTab('signup')">Sign Up</button>
+                </div>
+                <div id="loginForm">
+                    <div class="form-group"><label>Email</label><input type="email" id="loginEmail" placeholder="you@email.com"></div>
+                    <div class="form-group"><label>Password</label><input type="password" id="loginPass" placeholder="Password"></div>
+                    <button class="full-btn" onclick="loginWithEmail()">Sign In</button>
+                </div>
+                <div id="signupForm" style="display:none">
+                    <div class="form-group"><label>Email</label><input type="email" id="signupEmail" placeholder="you@email.com"></div>
+                    <div class="form-group"><label>Password</label><input type="password" id="signupPass" placeholder="Min 6 characters"></div>
+                    <button class="full-btn" onclick="signupWithEmail()">Create Account</button>
+                </div>
+                <div class="error-msg" id="loginError"></div>
+                <a href="#home" class="back-link">&larr; Back to GameHub</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- PLAY -->
+    <div class="page" id="page-play">
+        <div class="game-page" id="gameContainer">
+            <div class="game-header">
+                <div class="game-info-bar">
+                    <h1 id="gameTitle">Loading...</h1>
+                    <div class="game-meta-bar">
+                        <span id="gameCategory">-</span>
+                        <span id="gameAuthor">-</span>
+                        <span id="gamePlays">0 plays</span>
+                    </div>
+                </div>
+                <div class="game-actions">
+                    <button onclick="window.location.hash='#home'">&larr; Back</button>
+                    <button onclick="toggleFullscreen()">Fullscreen</button>
+                </div>
+            </div>
+            <div class="game-wrapper"><iframe id="gameFrame" allowfullscreen></iframe></div>
+            <div class="game-desc-box"><h3>About this game</h3><p id="gameDesc">Loading...</p></div>
+        </div>
+    </div>
+
+    <!-- UPLOAD -->
+    <div class="page" id="page-upload">
+        <div class="upload-page">
+            <h1 style="font-size:1.8rem;margin-bottom:0.5rem">Upload Your Game</h1>
+            <p style="color:#888;margin-bottom:2rem">Share your creation with the GameHub community</p>
+            <div class="card">
+                <h2 class="card-title">Game Details</h2>
+                <form id="uploadForm" onsubmit="event.preventDefault();uploadGame()">
+                    <div class="form-group"><label>Game Title *</label><input type="text" id="upTitle" required placeholder="My Awesome Game"></div>
+                    <div class="form-group"><label>Category</label><select id="upCategory">
+                        <option value="Platformer">Platformer</option><option value="Puzzle">Puzzle</option><option value="Action">Action</option>
+                        <option value="Adventure">Adventure</option><option value="Arcade">Arcade</option><option value="Strategy">Strategy</option><option value="Other">Other</option>
+                    </select></div>
+                    <div class="form-group"><label>Description</label><textarea id="upDesc" placeholder="Tell people about your game..."></textarea></div>
+                    <div class="form-group"><label>Game URL (hosted elsewhere)</label><input type="url" id="upUrl" placeholder="https://your-game.com"></div>
+                    <button type="submit" class="upload-btn">Upload Game</button>
+                    <div class="status-msg" id="upStatus"></div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- EDITOR -->
+    <div class="page" id="page-editor">
+        <div class="editor-layout">
+            <div class="tool-panel">
+                <div class="panel-title">Tools</div>
+                <div class="tool-group">
+                    <label>Brush</label>
+                    <div class="tool-grid">
+                        <button class="tool-btn active" data-tool="ground" title="Ground">🟫</button>
+                        <button class="tool-btn" data-tool="platform" title="Platform">🟩</button>
+                        <button class="tool-btn" data-tool="spike" title="Spike">🔺</button>
+                        <button class="tool-btn" data-tool="coin" title="Coin">🪙</button>
+                        <button class="tool-btn" data-tool="player" title="Player Spawn">🟢</button>
+                        <button class="tool-btn" data-tool="enemy" title="Enemy">🔴</button>
+                        <button class="tool-btn" data-tool="flag" title="Goal Flag">🏁</button>
+                        <button class="tool-btn" data-tool="spring" title="Spring">🔵</button>
+                        <button class="tool-btn" data-tool="eraser" title="Eraser">❌</button>
+                    </div>
+                </div>
+                <div class="tool-group">
+                    <label>Grid Size</label>
+                    <select class="sel-btn" id="gridSizeSel">
+                        <option value="20">20px Small</option>
+                        <option value="30" selected>30px Medium</option>
+                        <option value="40">40px Large</option>
+                    </select>
+                </div>
+                <div class="tool-group">
+                    <label>Actions</label>
+                    <div class="action-btns">
+                        <button class="action-btn primary" onclick="previewEditorGame()">Play Test</button>
+                        <button class="action-btn" onclick="exportEditorGame()">Upload to GameHub</button>
+                        <button class="action-btn" onclick="saveEditorLocal()">Save Locally</button>
+                        <button class="action-btn" onclick="loadEditorLocal()">Load Local</button>
+                        <button class="action-btn danger" onclick="clearEditor()">Clear All</button>
+                    </div>
+                </div>
+                <div class="status-msg" id="editorStatus"></div>
+            </div>
+            <div class="canvas-area">
+                <canvas id="editorCanvas" width="900" height="500"></canvas>
+                <div class="status-bar">
+                    <span id="statusCoords">X: 0, Y: 0</span>
+                    <span id="statusTool">Tool: ground</span>
+                    <span id="statusGrid">Grid: 30px</span>
+                </div>
+            </div>
+        </div>
+        <div class="preview-modal" id="previewModal">
+            <div class="preview-content">
+                <button class="preview-close" onclick="closePreview()">&times;</button>
+                <canvas id="previewCanvas" width="900" height="500"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- ADMIN -->
+    <div class="page" id="page-admin">
+        <div class="admin-layout">
+            <div class="admin-sidebar">
+                <div class="admin-sidebar-title">Admin Panel</div>
+                <div class="admin-nav">
+                    <button class="admin-tab-btn active" onclick="showAdminTab('dashboard',this)">Dashboard</button>
+                    <button class="admin-tab-btn" onclick="showAdminTab('addGame',this)">Add Game</button>
+                    <button class="admin-tab-btn" onclick="showAdminTab('manageGames',this)">Manage Games</button>
+                    <a href="#home" class="admin-tab-btn" style="text-decoration:none">Back to Site</a>
+                </div>
+            </div>
+            <div class="admin-main">
+                <div class="admin-tab-content active" id="admin-dashboard">
+                    <h2 style="font-size:1.5rem;margin-bottom:1.5rem">Dashboard</h2>
+                    <div class="stats-grid">
+                        <div class="stat-card"><div class="stat-number" id="adminTotalGames">-</div><div class="stat-label">Total Games</div></div>
+                    </div>
+                </div>
+                <div class="admin-tab-content" id="admin-addGame">
+                    <h2 style="font-size:1.5rem;margin-bottom:1.5rem">Add Game</h2>
+                    <div class="card">
+                        <form id="addGameForm" onsubmit="event.preventDefault();addAdminGame()">
+                            <div class="form-group"><label>Game Title *</label><input type="text" id="adminTitle" required placeholder="Game title"></div>
+                            <div class="form-group"><label>Category</label><select id="adminCategory">
+                                <option value="Platformer">Platformer</option><option value="Puzzle">Puzzle</option><option value="Action">Action</option>
+                                <option value="Adventure">Adventure</option><option value="Arcade">Arcade</option><option value="Strategy">Strategy</option><option value="Other">Other</option>
+                            </select></div>
+                            <div class="form-group"><label>Description</label><textarea id="adminDesc" placeholder="Description..."></textarea></div>
+                            <div class="form-group"><label>Game URL</label><input type="url" id="adminUrl" placeholder="https://..."></div>
+                            <div class="form-group" style="display:flex;align-items:center;gap:0.5rem"><input type="checkbox" id="adminFeatured" style="width:18px;height:18px;accent-color:#667eea"><label for="adminFeatured" style="margin:0">Featured</label></div>
+                            <button type="submit" class="upload-btn">Add Game</button>
+                            <div class="status-msg" id="adminStatus"></div>
+                        </form>
+                    </div>
+                </div>
+                <div class="admin-tab-content" id="admin-manageGames">
+                    <h2 style="font-size:1.5rem;margin-bottom:1.5rem">Manage Games</h2>
+                    <div class="card">
+                        <table><thead><tr><th>Title</th><th>Category</th><th>Plays</th><th>Featured</th><th>Approved</th><th>Actions</th></tr></thead>
+                        <tbody id="adminGamesBody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody></table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        window.showAdminTab = function(tab, btn) {
+            document.querySelectorAll(".admin-tab-content").forEach(t => t.classList.remove("active"));
+            document.querySelectorAll(".admin-tab-btn").forEach(b => b.classList.remove("active"));
+            document.getElementById("admin-" + tab).classList.add("active");
+            btn.classList.add("active");
+        };
+    </script>
+</body>
+</html>
